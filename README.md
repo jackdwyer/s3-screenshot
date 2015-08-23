@@ -1,5 +1,5 @@
 # S3-Screenshot
-Utilizing scrot to take screenshots, upload directly to personal S3 bucket and return URL
+Utilizing scrot to take screenshots, upload directly to personal S3 bucket. Returns URL to stdout and to the clipboard.
 
 ### Example Usage
 ```bash

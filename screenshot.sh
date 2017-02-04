@@ -1,42 +1,110 @@
 #!/bin/bash
-# Jack Dwyer 2015
-
+# Jack Dwyer 2017
+# Feb 2017 - Adding b2 support, debug switch, ignore upload switch
 
 DIR="$(dirname "$(readlink -f "$0")")"
 
 # Load config, or doesn't exist expect environment variables to be set
 if [[ -f "$DIR"/config ]]; then
-  . "$DIR"/config
+  # shellcheck source=/dev/null
+  source "$DIR"/config
 fi
 
-LOAD_IMAGES_IN_CHROME=false
+log() { 
+  echo "[${1}] ${2}"
+}
+
+log_debug() { 
+  log "DEBUG" "${1}"
+}
+
+log_error() { 
+  log "ERROR" "${1}"
+}
+
+log_info() { 
+  log "INFO" "${1}"
+}
+
 ALL_DISPLAYS=false
+DEBUG=1
+LOAD_IMAGES_IN_CHROME=false
+UPLOAD=0
+
 DATE=$(date -R)
 
 check_deps () {
   dependencies=('curl' 'openssl' 'scrot' 'xclip' 'file')
   for dependency in "${dependencies[@]}"; do
     if [[ $(command -v "${dependency}" > /dev/null; echo $?) -ne 0 ]]; then
-      printf "ERROR: missing %s.  Please install, or add to PATH\n" "${dependency}"
+      log_error "Missing dependency: ${dependency}"
       exit 2
     fi
   done
 }
 
+mime_type() {
+  file --mime-type "${1}" | cut -d" " -f2
+}
+
+sha1_file() {
+  openssl dgst -sha1 "${1}" | awk '{print $2}'
+}
+
+B2_AUTH_ACCOUNT_URL=https://api.backblazeb2.com/b2api/v1/b2_authorize_account
+B2_GET_UPLOAD_URL=https://api001.backblazeb2.com/b2api/v1/b2_get_upload_url
+
+upload_b2() {
+  FILE=${1}
+  AUTH_TOKEN=$(curl -s -u "${B2_ACCOUNT_ID}:${B2_APPLICATION_KEY}" \
+               ${B2_AUTH_ACCOUNT_URL} | jq -r .authorizationToken)
+  resp=$(curl -s -H "Authorization: ${AUTH_TOKEN}" \
+              -d '{"bucketId": "'${B2_BUCKET_ID}'"}' \
+              ${B2_GET_UPLOAD_URL} | jq -r .uploadUrl,.authorizationToken)
+  UPLOAD_URL=$(echo ${resp} | awk '{print $1}')
+  UPLOAD_AUTH=$(echo ${resp} | awk '{print $2}')
+
+  curl -H "Authorization: ${UPLOAD_AUTH}" \
+       -H "X-Bz-File-name: $(basename ${FILE})" \
+       -H "Content-Type: $(mime_type ${FILE})" \
+       -H "X-Bz-Content-sha1: $(sha1_file ${FILE})" \
+       --data-binary @"${FILE}" \
+       -s -o/dev/null \
+       ${UPLOAD_URL}
+
+  echo "https://f001.backblazeb2.com/file/filesjackdwyer/$(basename ${FILE})"
+}
+
+
 upload () {
-  local file="$1"
-  local content_type="$(file --mime-type "${file}" | cut -d" " -f2)"
-  local sign_me="PUT\n\n${content_type}\n$DATE\n/$BUCKET/$(basename "${file}")"
-  local sig=$(echo -en "${sign_me}" | openssl sha1 -hmac "${AWS_SECRET_ACCESS_KEY}" -binary | base64)
+  local content_type
+  local file
+  local image_url
+  local sign_me
+  local sig
+ 
+  if [[ "${UPLOAD}" -ne 0 ]]; then
+    log_info "Upload disabled"
+    return
+  fi
+  file="$1"
+
+  log_info "Uploading ..."
+
+  upload_b2 ${file}
+  exit 99
+  content_type="mimetype()"
+  sign_me="PUT\n\n${content_type}\n$DATE\n/$BUCKET/$(basename "${file}")"
+  sig=$(echo -en "${sign_me}" | openssl sha1 -hmac "${AWS_SECRET_ACCESS_KEY}" -binary | base64)
   echo "uploading..."
   curl -X PUT -T "${file}" --insecure \
     -H "Host: ${BUCKET}.s3.amazonaws.com" \
     -H "Date: $DATE" \
     -H "Content-Type: ${content_type}" \
     -H "Authorization: AWS ${AWS_ACCESS_KEY_ID}:${sig}" \
-    https://${BUCKET}.s3.amazonaws.com/"$(basename "${file}")"
+    https://"${BUCKET}".s3.amazonaws.com/"$(basename "${file}")"
 
-  local image_url="http://${BUCKET}/$(basename "${file}")"
+  image_url="http://${BUCKET}/$(basename "${file}")"
   echo "${image_url}"
   echo "${image_url}" | xclip -selection clipboard
 
@@ -51,50 +119,62 @@ upload_file() {
 
 check_ret() {
   if [[ $1 -ne 0 ]]; then
-    echo "$2"
+    log_error "$2"
     exit 10
   fi
 }
 
+generate_name() {
+  cat /dev/urandom | tr -d -c [:alnum:] | head -c 15
+}
+
 screenshot () {
-  local image=$HOME/Pictures/$(date +"%Y_%m_%d-%H:%M:%S").png
+  local image
+  local retval
+  #image=$HOME/Pictures/$(date +"%Y_%m_%d-%H:%M:%S").png
+  image=$HOME/Pictures/$(generate_name).png
   if [[ "$ALL_DISPLAYS" = true ]]; then
-    local retval=$(scrot "${image}"; echo $?)
+    retval=$(scrot "${image}"; echo $?)
     check_ret "${retval}" "Screenshot failed"
-    upload "${image}"
   else
     echo "Select area for screenshot"
-    local retval=$(scrot -s "${image}"; echo $?)
+    retval=$(scrot -s "${image}"; echo $?)
     check_ret "${retval}" "Screenshot failed"
-    upload "${image}"
   fi
+  if [[ ${DEBUG} -eq 0 ]]; then
+    log_debug "Image path: ${image}"
+  fi
+  upload "${image}"
 }
 
 show_help () {
-  echo "Usage: $(basename "$0") [-f <file_to_upload>]"
-  echo "                  [-a] screenshot all displays"
+  echo "Usage: $(basename "$0") [OPTION]"
+  echo "  [-a]            screenshot all displays"
+  echo "  [-d]            enable debug"
+  echo "  [-f FILE]       upload FILE"
+  echo "  [-h]            show help"
+  echo "  [-i]            do not upload"
 }
 
 check_deps
 
-if [[ $# -eq 0 ]]; then
-  screenshot
-  exit 0
-fi
-
-while getopts ":f:ah" opt; do
+while getopts ":f:adhi" opt; do
   case $opt in
     a)
       ALL_DISPLAYS=true
-      screenshot
-      exit 0
       ;;
-   f)
+    d)
+      DEBUG=0
+      ;;
+    f)
       upload_file "$OPTARG"
       ;;
     h)
       show_help
       exit 0
+      ;;
+    i)
+      UPLOAD=1
       ;;
     \?)
       echo "invalid option : -$OPTARG"
@@ -108,3 +188,5 @@ while getopts ":f:ah" opt; do
       ;;
   esac
 done
+
+screenshot

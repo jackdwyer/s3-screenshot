@@ -2,13 +2,12 @@
 # Jack Dwyer 2017
 # Feb 2017 - Adding b2 support, debug switch, ignore upload switch
 
-DIR="$(dirname "$(readlink -f "$0")")"
-
-# Load config, or doesn't exist expect environment variables to be set
-if [[ -f "$DIR"/config ]]; then
-  # shellcheck source=/dev/null
-  source "$DIR"/config
-fi
+CONFIG_LOCATION="${HOME}/.config/s3-screenshot.conf"
+ALL_DISPLAYS=false
+DEBUG=1
+LOAD_IMAGES_IN_CHROME=false
+UPLOAD=0
+DATE=$(date -R)
 
 log() { 
   echo "[${1}] ${2}"
@@ -26,12 +25,26 @@ log_info() {
   log "INFO" "${1}"
 }
 
-ALL_DISPLAYS=false
-DEBUG=1
-LOAD_IMAGES_IN_CHROME=false
-UPLOAD=0
+check_ret() {
+  if [[ $1 -ne 0 ]]; then
+    log_error "$2"
+    exit 10
+  fi
+}
 
-DATE=$(date -R)
+generate_name() {
+  echo "aut"
+  echo $(cat /dev/urandom | tr -d -c [:alnum:] | head -c 15)
+}
+
+# Load config, or doesn't exist expect environment variables to be set
+if [[ ! -f ${CONFIG_LOCATION} ]]; then
+  log_info "No configuration at ${CONFIG_LOCATION}, skipping upload"
+  UPLOAD=1
+else
+  # shellcheck source=/dev/null
+  source "${CONFIG_LOCATION}"
+fi
 
 check_deps () {
   dependencies=('curl' 'openssl' 'scrot' 'xclip' 'file')
@@ -72,27 +85,17 @@ upload_b2() {
        -s -o/dev/null \
        ${UPLOAD_URL}
 
-  echo "https://f001.backblazeb2.com/file/filesjackdwyer/$(basename ${FILE})"
+  echo "${B2_BASE_FILE_URL}/$(basename ${FILE})" | xclip -selection clipboard
 }
 
-
-upload () {
+upload_aws() {
   local content_type
   local file
   local image_url
   local sign_me
   local sig
  
-  if [[ "${UPLOAD}" -ne 0 ]]; then
-    log_info "Upload disabled"
-    return
-  fi
-  file="$1"
-
-  log_info "Uploading ..."
-
-  upload_b2 ${file}
-  exit 99
+  file=${1}
   content_type="mimetype()"
   sign_me="PUT\n\n${content_type}\n$DATE\n/$BUCKET/$(basename "${file}")"
   sig=$(echo -en "${sign_me}" | openssl sha1 -hmac "${AWS_SECRET_ACCESS_KEY}" -binary | base64)
@@ -104,35 +107,37 @@ upload () {
     -H "Authorization: AWS ${AWS_ACCESS_KEY_ID}:${sig}" \
     https://"${BUCKET}".s3.amazonaws.com/"$(basename "${file}")"
 
-  image_url="http://${BUCKET}/$(basename "${file}")"
-  echo "${image_url}"
-  echo "${image_url}" | xclip -selection clipboard
+  echo "http://${BUCKET}/$(basename "${file}")" | xclip -selection clipboard
+}
 
-  if [[ $LOAD_IMAGES_IN_CHROME = true ]]; then
-    google-chrome "${image_url}"
+upload () {
+  if [[ "${UPLOAD}" -ne 0 ]]; then
+    log_info "Upload disabled"
+    return
   fi
+  file="$1"
+  log_info "Uploading ..."
+
+  upload_b2 ${file}
+  # upload_aws ${file}
+  # echo "${image_url}"
+  # echo "${image_url}" | xclip -selection clipboard
+
+  # if [[ $LOAD_IMAGES_IN_CHROME = true ]]; then
+  #   google-chrome "${image_url}"
+  # fi
 }
 
 upload_file() {
   upload "$1"
 }
 
-check_ret() {
-  if [[ $1 -ne 0 ]]; then
-    log_error "$2"
-    exit 10
-  fi
-}
-
-generate_name() {
-  cat /dev/urandom | tr -d -c [:alnum:] | head -c 15
-}
-
 screenshot () {
   local image
   local retval
-  #image=$HOME/Pictures/$(date +"%Y_%m_%d-%H:%M:%S").png
-  image=$HOME/Pictures/$(generate_name).png
+  ran=$(cat /dev/urandom | tr -d -c 'a-zA-Z0-9' | head -c 35)
+  image=$HOME/Pictures/${ran}.png
+
   if [[ "$ALL_DISPLAYS" = true ]]; then
     retval=$(scrot "${image}"; echo $?)
     check_ret "${retval}" "Screenshot failed"

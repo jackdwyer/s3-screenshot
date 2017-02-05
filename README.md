@@ -9,15 +9,19 @@ upload...
 http://<s3_bucket>/<date>
 ```
 
-### Installation
+## Installation
+`make install`
+
+
+### AWS s3
 [Configuring S3 Bucket Static Website Hosting](http://docs.aws.amazon.com/AmazonS3/latest/dev/WebsiteHosting.html)
 
-Set variables in `config` or apply to environment
-```bash
-AWS_ACCESS_KEY_ID=
-AWS_SECRET_ACCESS_KEY=
-BUCKET=
-```
+### BackBlaze b2
+[Create Bucket](https://www.backblaze.com/b2/docs/b2_create_bucket.html)
+
+### Configuration
+Configuration is stored in `${HOME}/.config/s3-screenshot.conf`
+
 
 ### Dependencies
 * [curl](http://curl.haxx.se/)

@@ -86,6 +86,7 @@ upload_b2() {
        ${UPLOAD_URL}
 
   echo "${B2_BASE_FILE_URL}/$(basename ${FILE})" | xclip -selection clipboard
+  echo "${B2_BASE_FILE_URL}/$(basename ${FILE})"
 }
 
 upload_aws() {

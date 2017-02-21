@@ -174,6 +174,7 @@ while getopts ":f:adhi" opt; do
       ;;
     f)
       upload_file "$OPTARG"
+      exit 0
       ;;
     h)
       show_help
